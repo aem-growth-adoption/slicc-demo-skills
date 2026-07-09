@@ -99,23 +99,67 @@ Procedure after every `sprinkle send`:
    sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Navigating to page..."}'
    ```
 
-### Step 3 — Run the migration
+### Step 3 — Run the migration (follow migrate-page procedure directly)
 
-Now invoke the `migrate-page` skill with the URL and repo. The skill
-handles all four phases internally (extraction → decomposition → blocks → assembly).
+**DO NOT invoke migrate-page as a named skill** — that would trigger its
+built-in sprinkle alongside ours. Instead, read the migrate-page SKILL.md
+and follow its procedure directly:
 
-**IMPORTANT:** The cone must monitor progress and push pipeline updates
-as the migrate-page skill progresses through its phases. Watch for:
+```
+read_file /workspace/skills/migrate-page/SKILL.md
+```
 
-- Phase 1 starts (browser opens) → push `extraction` active
-- Phase 1 completes (visual tree captured) → push `extraction` done, `decomposition` active
-- Phase 2 completes (blocks identified) → push `decomposition` done, `blocks` active
-- Phase 3 progress (scoops created) → push `blocks` active with summary like "3/6 blocks done"
-- Phase 3 completes (all scoops done) → push `blocks` done, `assembly` active
-- Phase 4 completes (page assembled) → push `assembly` done, `deploy` active
+Then execute its four phases as the cone, pushing our pipeline sprinkle
+updates at each transition:
 
-The migrate-page skill sends `sprinkle send migrate-page` updates for
-its own sprinkle — use those as signals to update our pipeline sprinkle.
+**Phase 1 — Extraction:**
+Follow migrate-page Phase 1 steps (navigate, lazy-load scroll, de-sticky,
+visual tree, screenshot, brand extract, metadata, block inventory).
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Capturing page structure..."}'
+```
+When complete:
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"done","summary":"Page captured"}'
+```
+
+**Phase 2 — Decomposition:**
+Follow migrate-page Phase 2 (classify visual tree into blocks/sections)
+and Phase 2.5 (brand/fonts/styles setup).
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"active","summary":"Identifying blocks..."}'
+```
+When complete:
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"done","summary":"N blocks identified"}'
+```
+
+**Phase 3 — Block Generation:**
+Follow migrate-page Phase 3 (create one scoop per block, monitor completion).
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"Generating 0/N blocks..."}'
+```
+Update as scoops complete:
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"3/6 blocks done"}'
+```
+When all complete:
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"done","summary":"All N blocks generated"}'
+```
+
+**Phase 4 — Assembly:**
+Follow migrate-page Phase 4 (collect results, assemble page, create preview).
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"active","summary":"Assembling page..."}'
+```
+When complete:
+```
+sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"done","summary":"Page assembled"}'
+```
+
+**Remember:** After every `sprinkle send`, rewrite the pipeline `.shtml`
+file with updated state (see State Persistence section above).
 
 ### Step 4 — Deploy
 
