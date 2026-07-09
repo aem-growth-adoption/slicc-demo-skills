@@ -24,6 +24,8 @@ Liftoff to AEM Labs demo experience.
 ## Prerequisites
 
 - Migration skills installed (`upskill aemcoder/skills --path skills/migration --all`)
+- The `migrate-page` sprinkle must be closed after install (`sprinkle close migrate-page`)
+  because it conflicts with our pipeline sprinkle.
 - GitHub access configured by the Liftoff Lab
 - EDS repo pre-created by the Liftoff Lab
 
@@ -101,9 +103,9 @@ Procedure after every `sprinkle send`:
 
 ### Step 3 — Run the migration (follow migrate-page procedure directly)
 
-**DO NOT invoke migrate-page as a named skill** — that would trigger its
-built-in sprinkle alongside ours. Instead, read the migrate-page SKILL.md
-and follow its procedure directly:
+**DO NOT invoke migrate-page as a named skill** — that would re-open
+its sprinkle. Instead, read the migrate-page SKILL.md and follow
+its procedure directly:
 
 ```
 read_file /workspace/skills/migrate-page/SKILL.md
