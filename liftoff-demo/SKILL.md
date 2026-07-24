@@ -134,8 +134,11 @@ Fail fast before opening any sprinkle:
    sprinkle close migrate-page
    ```
 
-   It conflicts with our pipeline sprinkle. If it re-opens later in the run
-   (e.g. after a skill re-install), close it again.
+   It conflicts with our pipeline sprinkle. Note: `sprinkle close` succeeds even though
+   `sprinkle list` will still show `migrate-page` — the list includes ALL available
+   `.shtml` files, not just open ones. Confirm closure by the ABSENCE of the `[open]`
+   marker next to it in `sprinkle list`, not by its absence from the list. Only re-close
+   if it actually shows `[open]` again (e.g. after a skill re-install).
 
 ### Step 1 — Setup & open pipeline sprinkle
 
@@ -310,6 +313,16 @@ URL path, NOT a literal `/index`), otherwise `CONTENT_PATH` itself (e.g.
 Commit and push all generated code to the repo: `blocks/`, `styles/`, `icons/`,
 `head.html`, and `drafts/` (images). Content does NOT go live from this push — keep going.
 
+**Push to `main`.** The preview/experiment URL serves from `main`
+(`https://main--{repo}--{owner}.aem.page/`), so `{ref}` is `main`. If `migrate-page`
+created a working branch (its Phase 1 runs `git checkout -b migrate/{slug}-{timestamp}`),
+fast-forward-merge it into `main` and push `main` BEFORE triggering preview — otherwise
+the code never reaches the ref the experiment serves and the page stays blank:
+
+```bash
+git checkout main && git merge --ff-only "migrate/{slug}-{timestamp}" && git push origin main
+```
+
 #### 4.2 Mount DA (cone-owned)
 
 ```bash
@@ -350,20 +363,31 @@ SVG served from the code bus via the EDS icon system
 (`<span class="icon icon-{name}">`) plus real HTML text — never a text-bearing
 `<img src="logo.svg">`.
 
-**Append a Page Metadata block** as the LAST element of the document, in the canonical
-div form — key/value CELL DIVS, not `<p>` tags (DA's normalization flattens anything
-else and strips the class, leaving visible junk text and no meta tags):
+**Append a Page Metadata block** as the LAST element of the document, wrapped in its
+OWN top-level section `<div>` — in the canonical div form with key/value CELL DIVS, not
+`<p>` tags (DA's normalization flattens anything else and strips the class, leaving
+visible junk text and no meta tags):
 
 ```html
-<div class="metadata">
-  <div><div>title</div><div>{title from .migration/metadata.json}</div></div>
-  <div><div>description</div><div>{description from .migration/metadata.json}</div></div>
+<div>
+  <div class="metadata">
+    <div><div>title</div><div>{title from .migration/metadata.json}</div></div>
+    <div><div>description</div><div>{description from .migration/metadata.json}</div></div>
+  </div>
 </div>
 ```
 
-The class must be exactly `metadata` (single lowercase token). This is what becomes
-`<title>`/`<meta name="description">`/OG tags at delivery — without it the page has no
-SEO metadata and the browser falls back to the H1.
+The class must be exactly `metadata` (single lowercase token), and the block MUST be its
+own top-level section — a bare `<div class="metadata">` placed directly under `<main>`
+is consumed but NOT converted to meta tags (the class disappears, zero
+`<title>`/`<meta>`/OG tags emitted, and the title falls back to the H1). Wrapped
+correctly, this becomes `<title>`/`<meta name="description">`/OG tags at delivery.
+
+**Symbol characters:** use HTML entities for symbols that may not round-trip through
+DA's markdown conversion — `&#169;` (©), `&#8482;` (™), `&#174;` (®). A literal `©` can
+arrive as the replacement character `�` on the live page even though it's stored
+correctly in `/mnt/da/`. (Em-dash `—` and middot `·` do survive, so this is per-symbol,
+not a blanket failure — verify the delivered page after preview.)
 
 #### 4.4 Upload via the mount + trigger preview
 
@@ -375,17 +399,19 @@ cp footer.html /mnt/da/footer.html
 ```
 
 Then trigger preview for EACH document. The endpoint requires auth (anonymous POSTs
-return 401) and the path has NO `.html` extension. Use `--fail-with-body` so an
-expired/invalid token or a 4xx/5xx response actually stops the run instead of being
-silently ignored, and bound each call with a timeout:
+return 401) and the path has NO `.html` extension. SLICC's `curl` does NOT support
+`--fail-with-body` (it errors `unrecognized option` and exits non-zero BEFORE making any
+request), so capture the status code explicitly and check it — this fails loudly on any
+non-2xx and bounds each call with a timeout:
 
 ```bash
 TOKEN=$(oauth-token adobe)
 for doc in "$CONTENT_PATH" nav footer; do
-  if ! curl --fail-with-body --show-error --connect-timeout 10 --max-time 30 \
+  CODE=$(curl -s -o /tmp/preview-resp -w '%{http_code}' --connect-timeout 10 --max-time 30 \
     -X POST -H "Authorization: Bearer $TOKEN" \
-    "https://admin.hlx.page/preview/{owner}/{repo}/{ref}/$doc"; then
-    echo "preview trigger failed for $doc — stopping, do not mark deploy done" >&2
+    "https://admin.hlx.page/preview/{owner}/{repo}/{ref}/$doc")
+  if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 300 ]; then
+    echo "preview trigger failed for $doc (HTTP $CODE) — stopping, do not mark deploy done" >&2
     exit 1
   fi
 done
@@ -531,3 +557,6 @@ None — this is a fully automated flow. The user watches, the cone drives.
   canonical shape; your original markup is gone, so match on visible text.
 - **DA media ingestion is lazy** — first preview after upload may show broken images
   for a while. Warm derivatives per Step 4.5 before judging anything broken.
+- **Sandbox `curl` quirks** — SLICC's `curl` does NOT support `--fail-with-body`; it
+  errors `unrecognized option` and exits before making the request. Check HTTP status
+  with `-w '%{http_code}'` and an explicit range test instead (see Step 4.4).
