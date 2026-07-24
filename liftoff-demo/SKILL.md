@@ -281,7 +281,10 @@ bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" deploy active "Publ
 
 **Target content path:** the init/handoff prompt MUST state where the page is published
 (e.g. "publish as `index` at site root"). If it doesn't, default to `index` (site root) —
-demo experiment URLs target the root — and say so in the final report.
+demo experiment URLs target the root — and say so in the final report. **Rule:** if the
+init/done payload's `experimentUrl` is the bare site root, `CONTENT_PATH=index` regardless
+of the source page's filename — do NOT derive it from `basecamp.html` etc. (the source
+page name and the deploy target are separate facts).
 
 Set `CONTENT_PATH` from that value (default `index`) and use it for EVERY step below —
 never hardcode `index`. Reject a value that starts with `/` or contains `..`; strip any
@@ -395,11 +398,21 @@ is NOT its own section is consumed but NOT converted — the class disappears, z
 correctly it becomes `<title>`/`<meta name="description">`/OG tags at delivery — without
 it the page has no SEO metadata.
 
-**Symbol characters:** use HTML entities for symbols that may not round-trip through
-DA's markdown conversion — `&#169;` (©), `&#8482;` (™), `&#174;` (®). A literal `©` can
-arrive as the replacement character `�` on the live page even though it's stored
-correctly in `/mnt/da/`. (Em-dash `—` and middot `·` do survive, so this is per-symbol,
-not a blanket failure — verify the delivered page after preview.)
+**Symbol characters:** some symbols don't round-trip through DA's markdown conversion — a
+literal `©` arrives as the replacement character `�` on the live page even though it's
+stored correctly in `/mnt/da/`. Don't rely on remembering to hand-encode; run a fixed
+transform on each assembled upload document BEFORE the `cp` to `/mnt/da` (Step 4.4). Use
+`|` as the `sed` delimiter — `#` collides with the `&#NNN;` entities and silently fails
+with `sed: command expected`:
+
+```bash
+for doc in "${CONTENT_PATH}.html" nav.html footer.html; do
+  sed -i 's|©|\&#169;|g; s|™|\&#8482;|g; s|®|\&#174;|g' "$doc"
+done
+```
+
+(Em-dash `—` and middot `·` do survive, so this is per-symbol, not a blanket failure —
+still verify the delivered page after preview.)
 
 #### 4.4 Upload via the mount + trigger preview
 
@@ -431,30 +444,49 @@ done
 
 #### 4.5 Warm the media pipeline
 
-DA ingests external image URLs lazily — on the first page loads, `media_*` derivatives
-may 404 or render broken (`naturalWidth == 0`) even though nothing is wrong. Images in
-hidden containers (e.g. inactive tab panes) never trigger a load at all and stay
-un-ingested until a user clicks. Warm everything deterministically:
+DA ingests external image URLs lazily — on first load, `media_*` derivatives may 404 or
+render broken (`naturalWidth == 0`) even though nothing is wrong. Blocks with hidden
+containers (tabs/accordion/carousel) are worse: their images aren't in a loadable state
+until the pane is activated, so a passive DOM scan under-counts them and a passive
+`naturalWidth` read on the visible pane still misleads. Warm everything deterministically:
 
-1. Open `{{PREVIEW_URL}}` in playwright and collect image state from the DOM in one pass —
-   including hidden elements — separating already-broken URLs from warmable media
-   derivatives:
+1. **Reveal hidden panes first.** If any assembled block has hidden panes (a block scoop
+   reports `hasHiddenPanes` — see migrate-block; or infer from the decomposition, e.g.
+   `tabs`/`accordion`/`carousel`), make every pane visible before enumerating so ALL
+   image URLs are discovered and actually load:
 
    ```bash
-   playwright-cli eval --tab={previewTabId} "JSON.stringify((function(){ var urls = Array.from(document.querySelectorAll('img[src], source[srcset]')).flatMap(function(el){ return el.srcset ? el.srcset.split(',').map(function(s){ return s.trim().split(' ')[0]; }) : [el.getAttribute('src')]; }).filter(Boolean); var broken = urls.filter(function(u){ return u === 'about:error' || u === ''; }); var mediaUrls = Array.from(new Set(urls.filter(function(u){ return u.indexOf('media_') !== -1; }).map(function(u){ return new URL(u, location.href).href; }))); return { broken: broken, mediaUrls: mediaUrls }; })())"
+   playwright-cli eval --tab={previewTabId} "Array.from(document.querySelectorAll('[hidden],[aria-hidden=\"true\"],[style*=\"display:none\"],[style*=\"display: none\"]')).forEach(function(el){ el.hidden=false; el.removeAttribute('aria-hidden'); el.style.display=''; }); 'revealed'"
    ```
 
-2. **Fail loudly, don't just warm and hope:** if `broken` is non-empty, or `mediaUrls` is
-   empty despite the authored document containing images, the page has a real broken
-   image (this is exactly how the hidden-tab-pane failure from the retrospective would
-   show up) — report it and do NOT mark deploy done.
-3. Otherwise, `curl -s -o /dev/null -w '%{http_code}'` every URL in `mediaUrls`; retry with
-   backoff (e.g. 3 attempts, 5s apart) until each returns 200. The fetch itself warms the
-   ingestion.
+   Then reload/scroll and give the newly-visible images a moment to load.
 
-**Verification rule:** `naturalWidth == 0` is ambiguous — it is a false negative for
-SVGs sized by the icon decorator, and a transient state for still-ingesting media. Judge
-images by HTTP status of the media URL + a screenshot, never by `naturalWidth` alone.
+2. **Enumerate media URLs to a file.** Do NOT pipe into `node` (the sandbox has no
+   `process.stdin`/streaming node — see Known Limitations); redirect the eval output and
+   parse with `jq`:
+
+   ```bash
+   playwright-cli eval --tab={previewTabId} "JSON.stringify((function(){ var urls = Array.from(document.querySelectorAll('img[src], source[srcset]')).flatMap(function(el){ return el.srcset ? el.srcset.split(',').map(function(s){ return s.trim().split(' ')[0]; }) : [el.getAttribute('src')]; }).filter(Boolean); var broken = urls.filter(function(u){ return u === 'about:error' || u === ''; }); var mediaUrls = Array.from(new Set(urls.filter(function(u){ return u.indexOf('media_') !== -1; }).map(function(u){ return new URL(u, location.href).href; }))); return { broken: broken, mediaUrls: mediaUrls }; })())" > /tmp/media.json
+   jq -r '.mediaUrls[]' /tmp/media.json > /tmp/media-urls.txt
+   ```
+
+3. **Fail loudly, don't just warm and hope:** if `.broken` is non-empty, or `.mediaUrls`
+   is empty despite the document containing images, there's a real broken image (exactly
+   the hidden-pane failure mode) — report it and do NOT mark deploy done:
+
+   ```bash
+   jq -e '.broken | length == 0' /tmp/media.json >/dev/null \
+     || { echo "broken images on the page — do NOT mark deploy done" >&2; exit 1; }
+   ```
+
+4. **Warm** each URL: `curl -s -o /dev/null -w '%{http_code}'` every line of
+   `/tmp/media-urls.txt`; retry with backoff (e.g. 3 attempts, 5s apart) until each
+   returns 200. The fetch itself warms the ingestion.
+
+5. **Verify by activation + screenshot, never `naturalWidth` alone.** `naturalWidth == 0`
+   is ambiguous — a false negative for icon-decorator SVGs and a transient state for
+   still-ingesting media. After warming, navigate again, activate each pane, scroll, and
+   confirm real `naturalWidth` values plus a clean screenshot before marking deploy done.
 
 #### 4.6 Poll and confirm
 
@@ -592,6 +624,11 @@ None — this is a fully automated flow. The user watches, the cone drives.
 - **`node` cannot spawn `sprinkle`** — in SLICC's realm `child_process.spawnSync` is
   unavailable, so `pipeline.js` can only write state + `.shtml` + `.last-send.json`; use
   `psend.sh` to actually push the update (see Pipeline Updates).
+- **Sandbox `node` stdin/streaming unavailable** — `process.stdin`, `readFileSync(0)`,
+  and `child_process` all fail in the realm (`process.stdin.on is not a function`,
+  `startsWith is not a function`/EBADF). Do NOT pipe data into `node -e`. Pipe JSON to
+  `jq`, or write to a temp file and read it with a `*Sync` call. (Applies to the Step 4.5
+  media enumeration.)
 - **`mount --list` / `mount refresh` are approval-gated** — the initial
   `mount --source … /mnt/da` runs unprompted, but `list`/`refresh` block on interactive
   approval and can stall a run. Avoid them on the hot path; if you need `refresh` to
