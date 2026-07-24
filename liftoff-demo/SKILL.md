@@ -69,6 +69,7 @@ Rules:
 ## Pipeline Sprinkle Updates
 
 The cone pushes status updates between phases:
+
 - Before starting a phase: push `active` for the current step
 - When a phase completes: push `done`, then `active` for the next
 
@@ -94,6 +95,7 @@ reflecting all current step statuses. This ensures followers who join
 mid-session see the full accumulated progress.
 
 Procedure after every `sprinkle send`:
+
 1. Update your in-memory steps array with the new status AND timestamps (`startedAt`, `completedAt`)
 2. Rewrite `/shared/sprinkles/{{SLUG}}-pipeline/{{SLUG}}-pipeline.shtml`
 3. The `sprinkle send` pushes the live update; the rewritten file catches up new joiners
@@ -129,6 +131,7 @@ Fail fast before opening any sprinkle:
 3. Replace `{{URL}}`, `{{SLUG}}`
 4. Capture the start timestamp: `START_TS=$(date +%s000)`, then replace
    `{{INITIAL_STATE_JSON}}` with the initial state (setup=active, rest pending):
+
    ```json
    {"steps":[
      {"id":"setup","status":"active","summary":"Cloning repo & preparing environment...","link":null,"startedAt":<START_TS>,"completedAt":null},
@@ -136,12 +139,14 @@ Fail fast before opening any sprinkle:
      {"id":"decomposition","status":"pending","summary":"Identify blocks & sections","link":null,"startedAt":null,"completedAt":null},
      {"id":"blocks","status":"pending","summary":"Generate EDS blocks in parallel","link":null,"startedAt":null,"completedAt":null},
      {"id":"assembly","status":"pending","summary":"Assemble page & create preview","link":null,"startedAt":null,"completedAt":null},
-     {"id":"deploy","status":"pending","summary":"Commit & push to EDS","link":null,"startedAt":null,"completedAt":null}
+     {"id":"deploy","status":"pending","summary":"Publish content & go live","link":null,"startedAt":null,"completedAt":null}
    ]}
    ```
+
 5. Write to `/shared/sprinkles/{{SLUG}}-pipeline/{{SLUG}}-pipeline.shtml`
 6. Run: `sprinkle open {{SLUG}}-pipeline`
 7. Push initial status:
+
    ```
    sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"active","summary":"Cloning repo & preparing environment...","startedAt":'$START_TS'}'
    ```
@@ -151,6 +156,7 @@ Fail fast before opening any sprinkle:
 1. Clone the target repo: `git clone https://github.com/{{OWNER}}/{{REPO}}.git /shared/{{REPO}}`
 2. Migration skills were already verified in Step 0
 3. Push setup done + extraction active:
+
    ```
    SETUP_DONE=$(date +%s000)
    sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"done","summary":"Environment ready","startedAt":'$START_TS',"completedAt":'$SETUP_DONE'}'
@@ -174,10 +180,13 @@ updates at each transition:
 **Phase 1 — Extraction:**
 Follow migrate-page Phase 1 steps (navigate, lazy-load scroll, de-sticky,
 visual tree, screenshot, brand extract, metadata, block inventory).
+
 ```
 sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Capturing page structure...","startedAt":'$EXTRACT_START'}'
 ```
+
 When complete:
+
 ```
 EXTRACT_DONE=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"done","summary":"Page captured","startedAt":'$EXTRACT_START',"completedAt":'$EXTRACT_DONE'}'
@@ -186,11 +195,14 @@ sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"done","summary":
 **Phase 2 — Decomposition:**
 Follow migrate-page Phase 2 (classify visual tree into blocks/sections)
 and Phase 2.5 (brand/fonts/styles setup).
+
 ```
 DECOMP_START=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"active","summary":"Identifying blocks...","startedAt":'$DECOMP_START'}'
 ```
+
 When complete:
+
 ```
 DECOMP_DONE=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"done","summary":"N blocks identified","startedAt":'$DECOMP_START',"completedAt":'$DECOMP_DONE'}'
@@ -204,15 +216,20 @@ each its prompt in a single response, then `scoop_mute` every scoop, then issue 
 `scoop_wait` for all of them. Muting prevents each scoop completion from fragmenting the
 cone's flow into separate turns; the single wait delivers all completion summaries at once.
 Push `M/N blocks done` pipeline updates as completions arrive.
+
 ```
 BLOCKS_START=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"Generating 0/N blocks...","startedAt":'$BLOCKS_START'}'
 ```
+
 Update as scoops complete:
+
 ```
 sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"3/6 blocks done","startedAt":'$BLOCKS_START'}'
 ```
+
 When all complete:
+
 ```
 BLOCKS_DONE=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"done","summary":"All N blocks generated","startedAt":'$BLOCKS_START',"completedAt":'$BLOCKS_DONE'}'
@@ -220,11 +237,14 @@ sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"done","summary":"All
 
 **Phase 4 — Assembly:**
 Follow migrate-page Phase 4 (collect results, assemble page, create preview).
+
 ```
 ASSEMBLY_START=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"active","summary":"Assembling page...","startedAt":'$ASSEMBLY_START'}'
 ```
+
 When complete:
+
 ```
 ASSEMBLY_DONE=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"done","summary":"Page assembled","startedAt":'$ASSEMBLY_START',"completedAt":'$ASSEMBLY_DONE'}'
@@ -375,6 +395,7 @@ sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Liv
 1. Read `/workspace/skills/liftoff-demo/templates/complete.shtml.tpl`
 2. Replace `{{SLUG}}` and `{{COMPLETE_JSON}}`
 3. The data island shape:
+
    ```json
    {
      "url": "{{URL}}",
@@ -414,8 +435,8 @@ sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Liv
 from Step 4). Never report a metric the pipeline didn't compute — there is no visual-match
 measurement, so do not present one; describe fidelity qualitatively in chat if asked.
 
-4. Write to `/shared/sprinkles/{{SLUG}}-complete/{{SLUG}}-complete.shtml`
-5. Run: `sprinkle open {{SLUG}}-complete`
+1. Write to `/shared/sprinkles/{{SLUG}}-complete/{{SLUG}}-complete.shtml`
+2. Run: `sprinkle open {{SLUG}}-complete`
 
 ### Step 6 — Report
 
