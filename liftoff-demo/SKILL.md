@@ -145,46 +145,53 @@ updates at each transition:
 Follow migrate-page Phase 1 steps (navigate, lazy-load scroll, de-sticky,
 visual tree, screenshot, brand extract, metadata, block inventory).
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Capturing page structure..."}'
+sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Capturing page structure...","startedAt":'$EXTRACT_START'}'
 ```
 When complete:
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"done","summary":"Page captured"}'
+EXTRACT_DONE=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"done","summary":"Page captured","startedAt":'$EXTRACT_START',"completedAt":'$EXTRACT_DONE'}'
 ```
 
 **Phase 2 — Decomposition:**
 Follow migrate-page Phase 2 (classify visual tree into blocks/sections)
 and Phase 2.5 (brand/fonts/styles setup).
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"active","summary":"Identifying blocks..."}'
+DECOMP_START=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"active","summary":"Identifying blocks...","startedAt":'$DECOMP_START'}'
 ```
 When complete:
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"done","summary":"N blocks identified"}'
+DECOMP_DONE=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"done","summary":"N blocks identified","startedAt":'$DECOMP_START',"completedAt":'$DECOMP_DONE'}'
 ```
 
 **Phase 3 — Block Generation:**
 Follow migrate-page Phase 3 (create one scoop per block, monitor completion).
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"Generating 0/N blocks..."}'
+BLOCKS_START=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"Generating 0/N blocks...","startedAt":'$BLOCKS_START'}'
 ```
 Update as scoops complete:
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"3/6 blocks done"}'
+sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"3/6 blocks done","startedAt":'$BLOCKS_START'}'
 ```
 When all complete:
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"done","summary":"All N blocks generated"}'
+BLOCKS_DONE=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"done","summary":"All N blocks generated","startedAt":'$BLOCKS_START',"completedAt":'$BLOCKS_DONE'}'
 ```
 
 **Phase 4 — Assembly:**
 Follow migrate-page Phase 4 (collect results, assemble page, create preview).
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"active","summary":"Assembling page..."}'
+ASSEMBLY_START=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"active","summary":"Assembling page...","startedAt":'$ASSEMBLY_START'}'
 ```
 When complete:
 ```
-sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"done","summary":"Page assembled"}'
+ASSEMBLY_DONE=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"done","summary":"Page assembled","startedAt":'$ASSEMBLY_START',"completedAt":'$ASSEMBLY_DONE'}'
 ```
 
 **Remember:** After every `sprinkle send`, rewrite the pipeline `.shtml`
