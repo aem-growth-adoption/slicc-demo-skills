@@ -64,7 +64,17 @@ The cone pushes status updates between phases:
 - Before starting a phase: push `active` for the current step
 - When a phase completes: push `done`, then `active` for the next
 
-Format: `sprinkle send {{SLUG}}-pipeline '{"step":"<id>","status":"active|done","summary":"...","link":"..."}'`
+Format: `sprinkle send {{SLUG}}-pipeline '{"step":"<id>","status":"active|done","summary":"...","link":"...","startedAt":<epoch_ms>,"completedAt":<epoch_ms>}'`
+
+Timestamp rules:
+
+- When sending `"status":"active"`: include `"startedAt":<now_ms>` (capture BEFORE the
+  phase starts)
+- When sending `"status":"done"`: include `"completedAt":<now_ms>` (and the phase's
+  original `"startedAt"` so late joiners compute the elapsed time)
+- Capture timestamps with: `TIMESTAMP=$(date +%s000)` (epoch milliseconds)
+- The pipeline template renders live duration timers from these fields — omitting them
+  silently disables the timers
 
 Step IDs in order: `setup`, `extraction`, `decomposition`, `blocks`, `assembly`, `deploy`
 
@@ -76,7 +86,7 @@ reflecting all current step statuses. This ensures followers who join
 mid-session see the full accumulated progress.
 
 Procedure after every `sprinkle send`:
-1. Update your in-memory steps array with the new status
+1. Update your in-memory steps array with the new status AND timestamps (`startedAt`, `completedAt`)
 2. Rewrite `/shared/sprinkles/{{SLUG}}-pipeline/{{SLUG}}-pipeline.shtml`
 3. The `sprinkle send` pushes the live update; the rewritten file catches up new joiners
 
@@ -87,22 +97,23 @@ Procedure after every `sprinkle send`:
 1. Derive slug from the URL
 2. Read `/workspace/skills/liftoff-demo/templates/pipeline.shtml.tpl`
 3. Replace `{{URL}}`, `{{SLUG}}`
-4. Replace `{{INITIAL_STATE_JSON}}` with the initial state (setup=active, rest pending):
+4. Capture the start timestamp: `START_TS=$(date +%s000)`, then replace
+   `{{INITIAL_STATE_JSON}}` with the initial state (setup=active, rest pending):
    ```json
    {"steps":[
-     {"id":"setup","status":"active","summary":"Cloning repo & preparing environment...","link":null},
-     {"id":"extraction","status":"pending","summary":"Capture page structure & brand","link":null},
-     {"id":"decomposition","status":"pending","summary":"Identify blocks & sections","link":null},
-     {"id":"blocks","status":"pending","summary":"Generate EDS blocks in parallel","link":null},
-     {"id":"assembly","status":"pending","summary":"Assemble page & create preview","link":null},
-     {"id":"deploy","status":"pending","summary":"Commit & push to EDS","link":null}
+     {"id":"setup","status":"active","summary":"Cloning repo & preparing environment...","link":null,"startedAt":<START_TS>,"completedAt":null},
+     {"id":"extraction","status":"pending","summary":"Capture page structure & brand","link":null,"startedAt":null,"completedAt":null},
+     {"id":"decomposition","status":"pending","summary":"Identify blocks & sections","link":null,"startedAt":null,"completedAt":null},
+     {"id":"blocks","status":"pending","summary":"Generate EDS blocks in parallel","link":null,"startedAt":null,"completedAt":null},
+     {"id":"assembly","status":"pending","summary":"Assemble page & create preview","link":null,"startedAt":null,"completedAt":null},
+     {"id":"deploy","status":"pending","summary":"Commit & push to EDS","link":null,"startedAt":null,"completedAt":null}
    ]}
    ```
 5. Write to `/shared/sprinkles/{{SLUG}}-pipeline/{{SLUG}}-pipeline.shtml`
 6. Run: `sprinkle open {{SLUG}}-pipeline`
 7. Push initial status:
    ```
-   sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"active","summary":"Cloning repo & preparing environment..."}'
+   sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"active","summary":"Cloning repo & preparing environment...","startedAt":'$START_TS'}'
    ```
 
 ### Step 2 — Clone repo & verify environment
@@ -111,8 +122,10 @@ Procedure after every `sprinkle send`:
 2. Verify the migration skills are installed (they should be from the init prompt)
 3. Push setup done + extraction active:
    ```
-   sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"done","summary":"Environment ready"}'
-   sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Navigating to page..."}'
+   SETUP_DONE=$(date +%s000)
+   sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"done","summary":"Environment ready","startedAt":'$START_TS',"completedAt":'$SETUP_DONE'}'
+   EXTRACT_START=$(date +%s000)
+   sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Navigating to page...","startedAt":'$EXTRACT_START'}'
    ```
 
 ### Step 3 — Run the migration (follow migrate-page procedure directly)
