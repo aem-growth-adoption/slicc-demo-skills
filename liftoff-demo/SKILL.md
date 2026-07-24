@@ -368,7 +368,7 @@ sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Liv
      "stats": [
        { "value": "6", "label": "blocks migrated" },
        { "value": "3", "label": "fragments created" },
-       { "value": "~90%", "label": "visual match" }
+       { "value": "24", "label": "media assets published" }
      ],
      "nextSteps": [
        {
@@ -395,6 +395,11 @@ sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Liv
      ]
    }
    ```
+
+**Stats must be real counts** (blocks from the decomposition, fragments and media URLs
+from Step 4). Never report a metric the pipeline didn't compute — there is no visual-match
+measurement, so do not present one; describe fidelity qualitatively in chat if asked.
+
 4. Write to `/shared/sprinkles/{{SLUG}}-complete/{{SLUG}}-complete.shtml`
 5. Run: `sprinkle open {{SLUG}}-complete`
 
