@@ -31,9 +31,17 @@ Liftoff to AEM Labs demo experience.
 
 ## Key Rules
 
-- **Cone owns ALL `sprinkle send` calls** — never delegate pipeline updates to scoops
+- **Cone owns ALL `sprinkle send` calls** — never delegate pipeline updates to scoops.
+  This is a deliberate exception to the usual "delegate work to scoops" guidance:
+  only the cone sees every phase transition, and scoops busy with block work skip or
+  forget updates.
 - **Always mint fresh sprinkle names** per migration — never reuse/overwrite
 - **Rewrite the pipeline `.shtml` after every `sprinkle send`** — late-joining followers need to see accumulated progress, not a blank initial state
+- **All DA content operations go through the mount** (`/mnt/da/`) — never `curl`
+  `admin.da.live` to write content. The only admin API use is the authed preview
+  trigger (`POST admin.hlx.page/preview/...`).
+- **The target content path must be explicit** — take it from the init/handoff
+  prompt; default to `index` (site root) and state the assumption in the report.
 
 ## Slug Derivation
 
@@ -190,6 +198,12 @@ sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"done","summar
 
 **Phase 3 — Block Generation:**
 Follow migrate-page Phase 3 (create one scoop per block, monitor completion).
+
+**Coordinating the block scoops (mute → batched wait):** create ALL block scoops and feed
+each its prompt in a single response, then `scoop_mute` every scoop, then issue ONE batched
+`scoop_wait` for all of them. Muting prevents each scoop completion from fragmenting the
+cone's flow into separate turns; the single wait delivers all completion summaries at once.
+Push `M/N blocks done` pipeline updates as completions arrive.
 ```
 BLOCKS_START=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"Generating 0/N blocks...","startedAt":'$BLOCKS_START'}'
@@ -421,6 +435,14 @@ None — this is a fully automated flow. The user watches, the cone drives.
 
 ## Known Limitations
 
-- **Sprinkle file size limit** — keep under ~350KB. Use EDS URLs for images.
+- **Sprinkle file size limit** — keep each `.shtml` under ~350KB. Reference images
+  by URL in sprinkle payloads rather than base64-embedding. (Image handling for PAGE
+  CONTENT is covered in Step 4.3.)
 - **Sprinkle overwrite doesn't push to followers** — always mint fresh names.
 - **Scoop outputs go to `/shared/`** — cone and scoops can read each other's outputs.
+- **DA normalizes HTML on write** — malformed blocks (wrong cell structure, stray
+  `<p>` children) are silently flattened and lose their class. If a block "disappears"
+  on the live page, re-read the stored HTML from `/mnt/da/` and compare against the
+  canonical shape; your original markup is gone, so match on visible text.
+- **DA media ingestion is lazy** — first preview after upload may show broken images
+  for a while. Warm derivatives per Step 4.5 before judging anything broken.
