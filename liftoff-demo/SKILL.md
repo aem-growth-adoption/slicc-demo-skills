@@ -221,15 +221,140 @@ file with updated state (see State Persistence section above).
 
 ### Step 4 — Deploy
 
-After assembly completes:
+**Mental model — this is the step people get wrong:** in EDS, code (blocks, styles,
+icons) is served from the git repo, but page CONTENT is served from the content source
+(DA). `git push` alone NEVER produces a live page. Deploy = push code + upload content
+to DA + trigger preview.
 
-1. Ensure all changes are committed and pushed to the repo
-2. Trigger EDS preview for the migrated page
-3. Wait for the preview to be live (poll the URL)
-4. Push deploy done:
+Push deploy active first:
+
+```
+DEPLOY_START=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"active","summary":"Publishing content to DA...","startedAt":'$DEPLOY_START'}'
+```
+
+The preview URL derives as:
+
+```
+PREVIEW_URL = https://{ref}--{repo}--{owner}.aem.page/{content-path}
+```
+
+where `{ref}` is the branch (usually `main`) and `{content-path}` is empty for the
+site root.
+
+**Target content path:** the init/handoff prompt MUST state where the page is published
+(e.g. "publish as `index` at site root"). If it doesn't, default to `index` (site root) —
+demo experiment URLs target the root — and say so in the final report.
+
+#### 4.1 Commit & push code
+
+Commit and push all generated code to the repo: `blocks/`, `styles/`, `icons/`,
+`head.html`, and `drafts/` (images). Content does NOT go live from this push — keep going.
+
+#### 4.2 Mount DA (cone-owned)
+
+```bash
+mount --source da://{owner}/{repo} /mnt/da
+```
+
+Verify the mount before proceeding (`ls /mnt/da` — existing content or empty is fine).
+ALL content reads/writes go through this mount. NEVER use `curl` against `admin.da.live`
+to write content. The ONLY valid admin API call is triggering preview (step 4.4).
+
+#### 4.3 Build the DA documents
+
+Build `index.html` (or `{content-path}.html`), `nav.html`, and `footer.html` from the
+assembled outputs (`/shared/{repo-name}/drafts/{page-path}.plain.html` and the nav/footer
+fragments). DA documents are **body fragments** with strict rules — violations fail
+silently (DA normalizes the HTML on write and the page just renders wrong):
+
+- No `<!DOCTYPE>`, `<html>`, `<head>`, `<script>`, `<style>`, or inline `style=`
+  attributes. The pipeline injects head/scripts/styles from the code bus.
+- Blocks keep their canonical shape: `<div class="blockname">` with row/cell `<div>`s.
+  Malformed blocks are flattened to plain divs and lose their class — and there is no
+  error when this happens.
+
+**Rewrite every `<img src>` to an absolute, publicly reachable URL.** The assembled
+`.plain.html` uses root-relative `/drafts/images/...` paths — these are code-bus paths
+that DA cannot resolve; they render as `about:error` on the live page. EDS preview
+fetches each image URL and ingests it into its media pipeline (serving it back as
+`./media_<hash>.<ext>?...`), so any URL that returns image bytes works:
+
+- Preferred: the original absolute source-site URLs captured during extraction.
+- Alternative: absolute code-bus URLs (`https://{ref}--{repo}--{owner}.aem.page/drafts/images/...`)
+  AFTER the 4.1 push — verify one with `curl -sI` returns an image content-type before
+  relying on this.
+
+**Brand logo caution:** SVGs containing `<text>` do not survive DA's media optimization
+(rasterized to webp, text dropped — renders blank). Brand logos must be an icon-shape
+SVG served from the code bus via the EDS icon system
+(`<span class="icon icon-{name}">`) plus real HTML text — never a text-bearing
+`<img src="logo.svg">`.
+
+**Append a Page Metadata block** as the LAST element of the document, in the canonical
+div form — key/value CELL DIVS, not `<p>` tags (DA's normalization flattens anything
+else and strips the class, leaving visible junk text and no meta tags):
+
+```html
+<div class="metadata">
+  <div><div>title</div><div>{title from .migration/metadata.json}</div></div>
+  <div><div>description</div><div>{description from .migration/metadata.json}</div></div>
+</div>
+```
+
+The class must be exactly `metadata` (single lowercase token). This is what becomes
+`<title>`/`<meta name="description">`/OG tags at delivery — without it the page has no
+SEO metadata and the browser falls back to the H1.
+
+#### 4.4 Upload via the mount + trigger preview
+
+```bash
+cp index.html /mnt/da/index.html
+cp nav.html   /mnt/da/nav.html
+cp footer.html /mnt/da/footer.html
+```
+
+Then trigger preview for EACH document. The endpoint requires auth (anonymous POSTs
+return 401) and the path has NO `.html` extension:
+
+```bash
+TOKEN=$(oauth-token adobe)
+for doc in index nav footer; do
+  curl -X POST -H "Authorization: Bearer $TOKEN" \
+    "https://admin.hlx.page/preview/{owner}/{repo}/{ref}/$doc"
+done
+```
+
+#### 4.5 Warm the media pipeline
+
+DA ingests external image URLs lazily — on the first page loads, `media_*` derivatives
+may 404 or render broken (`naturalWidth == 0`) even though nothing is wrong. Images in
+hidden containers (e.g. inactive tab panes) never trigger a load at all and stay
+un-ingested until a user clicks. Warm everything deterministically:
+
+1. Open `{{PREVIEW_URL}}` in playwright and extract ALL media URLs from the DOM —
+   including hidden elements:
+
+   ```bash
+   playwright-cli eval --tab={previewTabId} "JSON.stringify(Array.from(new Set(Array.from(document.querySelectorAll('img[src], source[srcset]')).flatMap(function(el){ return el.srcset ? el.srcset.split(',').map(function(s){ return s.trim().split(' ')[0]; }) : [el.getAttribute('src')]; }).filter(function(u){ return u && u.indexOf('media_') !== -1; }).map(function(u){ return new URL(u, location.href).href; }))))"
    ```
-   sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Live!","link":"{{PREVIEW_URL}}"}'
-   ```
+
+2. `curl -s -o /dev/null -w '%{http_code}'` each URL; retry with backoff (e.g. 3 attempts,
+   5s apart) until every one returns 200. The fetch itself warms the ingestion.
+
+**Verification rule:** `naturalWidth == 0` is ambiguous — it is a false negative for
+SVGs sized by the icon decorator, and a transient state for still-ingesting media. Judge
+images by HTTP status of the media URL + a screenshot, never by `naturalWidth` alone.
+
+#### 4.6 Poll and confirm
+
+Poll `{{PREVIEW_URL}}` until it returns 200, then reload once more and screenshot to
+confirm the page renders (fonts, images, header, footer). Then push deploy done:
+
+```
+DEPLOY_DONE=$(date +%s000)
+sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Live!","link":"{{PREVIEW_URL}}","startedAt":'$DEPLOY_START',"completedAt":'$DEPLOY_DONE'}'
+```
 
 ### Step 5 — Open completion sprinkle
 
