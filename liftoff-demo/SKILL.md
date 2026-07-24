@@ -59,12 +59,19 @@ Rules:
 2. Take the last path segment, minus any file extension; use `index` when the path is
    `/` or empty.
 3. Lowercase everything.
-4. Append `-` + 4 random hex chars. Generate them with node — do NOT assume `openssl`
+4. **Sanitize:** replace every character outside `[a-z0-9-]` with `-` (this handles
+   spaces, punctuation, query strings, and Unicode in the URL — e.g. `foo;bar` →
+   `foo-bar`), collapse repeated `-` into one, trim leading/trailing `-`, and cap the
+   result at 40 characters.
+5. Append `-` + 4 random hex chars. Generate them with node — do NOT assume `openssl`
    exists in the sandbox:
 
    ```bash
    node -e "console.log(require('crypto').randomBytes(2).toString('hex'))"
    ```
+
+Always double-quote `"$SLUG"` (or the resolved `{{SLUG}}` value) in every shell command
+and sprinkle name — never interpolate it unquoted.
 
 ## Pipeline Sprinkle Updates
 
@@ -215,7 +222,12 @@ Follow migrate-page Phase 3 (create one scoop per block, monitor completion).
 each its prompt in a single response, then `scoop_mute` every scoop, then issue ONE batched
 `scoop_wait` for all of them. Muting prevents each scoop completion from fragmenting the
 cone's flow into separate turns; the single wait delivers all completion summaries at once.
-Push `M/N blocks done` pipeline updates as completions arrive.
+
+The batched `scoop_wait` itself only returns once EVERY scoop in the batch completes — it
+cannot report intermediate progress. If you want `M/N blocks done` updates as they arrive,
+poll each scoop's own completion marker (per migrate-page's monitoring convention) between
+the spawn and the batched wait, pushing an updated summary each time a new marker appears.
+If intermediate progress isn't needed, skip straight from `0/N` to `N/N`.
 
 ```
 BLOCKS_START=$(date +%s000)
@@ -267,18 +279,25 @@ DEPLOY_START=$(date +%s000)
 sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"active","summary":"Publishing content to DA...","startedAt":'$DEPLOY_START'}'
 ```
 
+**Target content path:** the init/handoff prompt MUST state where the page is published
+(e.g. "publish as `index` at site root"). If it doesn't, default to `index` (site root) —
+demo experiment URLs target the root — and say so in the final report.
+
+Set `CONTENT_PATH` from that value (default `index`) and use it for EVERY step below —
+never hardcode `index`. Reject a value that starts with `/` or contains `..`; strip any
+leading `/` and any `.html` suffix before using it.
+
 The preview URL derives as:
 
 ```
 PREVIEW_URL = https://{ref}--{repo}--{owner}.aem.page/{content-path}
 ```
 
-where `{ref}` is the branch (usually `main`) and `{content-path}` is empty for the
-site root.
-
-**Target content path:** the init/handoff prompt MUST state where the page is published
-(e.g. "publish as `index` at site root"). If it doesn't, default to `index` (site root) —
-demo experiment URLs target the root — and say so in the final report.
+where `{ref}` is the branch (usually `main`) and `{content-path}` is the URL-facing form
+of `CONTENT_PATH` — empty when `CONTENT_PATH` is `index` (the site root maps to an empty
+URL path, NOT a literal `/index`), otherwise `CONTENT_PATH` itself (e.g.
+`CONTENT_PATH=products/foo` → `.../products/foo`, backed by the DA document at
+`products/foo.html`).
 
 #### 4.1 Commit & push code
 
@@ -297,7 +316,7 @@ to write content. The ONLY valid admin API call is triggering preview (step 4.4)
 
 #### 4.3 Build the DA documents
 
-Build `index.html` (or `{content-path}.html`), `nav.html`, and `footer.html` from the
+Build `${CONTENT_PATH}.html`, `nav.html`, and `footer.html` from the
 assembled outputs (`/shared/{repo-name}/drafts/{page-path}.plain.html` and the nav/footer
 fragments). DA documents are **body fragments** with strict rules — violations fail
 silently (DA normalizes the HTML on write and the page just renders wrong):
@@ -343,19 +362,26 @@ SEO metadata and the browser falls back to the H1.
 #### 4.4 Upload via the mount + trigger preview
 
 ```bash
-cp index.html /mnt/da/index.html
-cp nav.html   /mnt/da/nav.html
+mkdir -p "/mnt/da/$(dirname "$CONTENT_PATH")"
+cp "${CONTENT_PATH}.html" "/mnt/da/${CONTENT_PATH}.html"
+cp nav.html    /mnt/da/nav.html
 cp footer.html /mnt/da/footer.html
 ```
 
 Then trigger preview for EACH document. The endpoint requires auth (anonymous POSTs
-return 401) and the path has NO `.html` extension:
+return 401) and the path has NO `.html` extension. Use `--fail-with-body` so an
+expired/invalid token or a 4xx/5xx response actually stops the run instead of being
+silently ignored, and bound each call with a timeout:
 
 ```bash
 TOKEN=$(oauth-token adobe)
-for doc in index nav footer; do
-  curl -X POST -H "Authorization: Bearer $TOKEN" \
-    "https://admin.hlx.page/preview/{owner}/{repo}/{ref}/$doc"
+for doc in "$CONTENT_PATH" nav footer; do
+  if ! curl --fail-with-body --show-error --connect-timeout 10 --max-time 30 \
+    -X POST -H "Authorization: Bearer $TOKEN" \
+    "https://admin.hlx.page/preview/{owner}/{repo}/{ref}/$doc"; then
+    echo "preview trigger failed for $doc — stopping, do not mark deploy done" >&2
+    exit 1
+  fi
 done
 ```
 
@@ -366,15 +392,21 @@ may 404 or render broken (`naturalWidth == 0`) even though nothing is wrong. Ima
 hidden containers (e.g. inactive tab panes) never trigger a load at all and stay
 un-ingested until a user clicks. Warm everything deterministically:
 
-1. Open `{{PREVIEW_URL}}` in playwright and extract ALL media URLs from the DOM —
-   including hidden elements:
+1. Open `{{PREVIEW_URL}}` in playwright and collect image state from the DOM in one pass —
+   including hidden elements — separating already-broken URLs from warmable media
+   derivatives:
 
    ```bash
-   playwright-cli eval --tab={previewTabId} "JSON.stringify(Array.from(new Set(Array.from(document.querySelectorAll('img[src], source[srcset]')).flatMap(function(el){ return el.srcset ? el.srcset.split(',').map(function(s){ return s.trim().split(' ')[0]; }) : [el.getAttribute('src')]; }).filter(function(u){ return u && u.indexOf('media_') !== -1; }).map(function(u){ return new URL(u, location.href).href; }))))"
+   playwright-cli eval --tab={previewTabId} "JSON.stringify((function(){ var urls = Array.from(document.querySelectorAll('img[src], source[srcset]')).flatMap(function(el){ return el.srcset ? el.srcset.split(',').map(function(s){ return s.trim().split(' ')[0]; }) : [el.getAttribute('src')]; }).filter(Boolean); var broken = urls.filter(function(u){ return u === 'about:error' || u === ''; }); var mediaUrls = Array.from(new Set(urls.filter(function(u){ return u.indexOf('media_') !== -1; }).map(function(u){ return new URL(u, location.href).href; }))); return { broken: broken, mediaUrls: mediaUrls }; })())"
    ```
 
-2. `curl -s -o /dev/null -w '%{http_code}'` each URL; retry with backoff (e.g. 3 attempts,
-   5s apart) until every one returns 200. The fetch itself warms the ingestion.
+2. **Fail loudly, don't just warm and hope:** if `broken` is non-empty, or `mediaUrls` is
+   empty despite the authored document containing images, the page has a real broken
+   image (this is exactly how the hidden-tab-pane failure from the retrospective would
+   show up) — report it and do NOT mark deploy done.
+3. Otherwise, `curl -s -o /dev/null -w '%{http_code}'` every URL in `mediaUrls`; retry with
+   backoff (e.g. 3 attempts, 5s apart) until each returns 200. The fetch itself warms the
+   ingestion.
 
 **Verification rule:** `naturalWidth == 0` is ambiguous — it is a false negative for
 SVGs sized by the icon decorator, and a transient state for still-ingesting media. Judge
@@ -382,8 +414,11 @@ images by HTTP status of the media URL + a screenshot, never by `naturalWidth` a
 
 #### 4.6 Poll and confirm
 
-Poll `{{PREVIEW_URL}}` until it returns 200, then reload once more and screenshot to
-confirm the page renders (fonts, images, header, footer). Then push deploy done:
+Poll `{{PREVIEW_URL}}` with a bounded deadline (e.g. every 5s, up to 2 minutes) until it
+returns 200 — do NOT poll unbounded; if the deadline is reached without a 200, stop and
+report the failure instead of hanging or silently marking deploy done. Once it's live,
+reload once more and screenshot to confirm the page renders (fonts, images, header,
+footer). Then push deploy done:
 
 ```
 DEPLOY_DONE=$(date +%s000)
@@ -401,16 +436,16 @@ sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Liv
      "url": "{{URL}}",
      "previewUrl": "{{PREVIEW_URL}}",
      "stats": [
-       { "value": "6", "label": "blocks migrated" },
-       { "value": "3", "label": "fragments created" },
-       { "value": "24", "label": "media assets published" }
+       { "value": "{{BLOCK_COUNT}}", "label": "blocks migrated" },
+       { "value": "{{FRAGMENT_COUNT}}", "label": "fragments created" },
+       { "value": "{{MEDIA_ASSET_COUNT}}", "label": "media assets published" }
      ],
      "nextSteps": [
        {
          "icon": "✏️",
          "title": "Edit your content",
          "description": "Open Document Authoring to edit pages and content",
-         "url": "https://da.live/canvas#/{{OWNER}}/{{REPO}}/index",
+         "url": "https://da.live/canvas#/{{OWNER}}/{{REPO}}/{{CONTENT_PATH}}",
          "linkLabel": "open"
        },
        {
@@ -431,8 +466,16 @@ sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Liv
    }
    ```
 
-**Stats must be real counts** (blocks from the decomposition, fragments and media URLs
-from Step 4). Never report a metric the pipeline didn't compute — there is no visual-match
+**Stats must be real counts, never sample literals.** Compute each placeholder before
+writing the completion sprinkle:
+
+- `{{BLOCK_COUNT}}` — number of blocks in `decomposition.json`.
+- `{{FRAGMENT_COUNT}}` — nav + footer + any additional fragments uploaded in Step 4.
+- `{{MEDIA_ASSET_COUNT}}` — count of UNIQUE media assets by source image or content
+  hash, NOT raw warmed-URL count (Step 4.5's URL list includes multiple responsive
+  variants per image, which would inflate the count).
+
+Never report a metric the pipeline didn't compute — there is no visual-match
 measurement, so do not present one; describe fidelity qualitatively in chat if asked.
 
 1. Write to `/shared/sprinkles/{{SLUG}}-complete/{{SLUG}}-complete.shtml`
