@@ -31,6 +31,9 @@ Liftoff to AEM Labs demo experience.
 
 ## Key Rules
 
+- **Never reference `/workspace/` or `file://` in anything a follower sees** —
+  pipeline `link` fields, confirmation screenshots, and sprinkle data must use
+  EDS/`aem.page` URLs, never local paths.
 - **Cone owns ALL `sprinkle send` calls** — never delegate pipeline updates to scoops.
   This is a deliberate exception to the usual "delegate work to scoops" guidance:
   only the cone sees every phase transition, and scoops busy with block work skip or
@@ -40,6 +43,9 @@ Liftoff to AEM Labs demo experience.
 - **All DA content operations go through the mount** (`/mnt/da/`) — never `curl`
   `admin.da.live` to write content. The only admin API use is the authed preview
   trigger (`POST admin.hlx.page/preview/...`).
+- **Never delete block-generation scoops after completion** — leave them alive for
+  debugging and retrospective; they cost nothing idle and their logs/state are
+  invaluable if something goes wrong downstream.
 - **The target content path must be explicit** — take it from the init/handoff
   prompt; default to `index` (site root) and state the assumption in the report.
 
@@ -492,6 +498,21 @@ Sprinkles open:
 
 Preview: {{PREVIEW_URL}}
 ```
+
+## Re-run Behavior
+
+If `/shared/{{REPO}}` already exists (a prior run of this skill for the same target
+repo):
+
+- Ask: "I have an existing clone at `/shared/{{REPO}}`. Re-run from scratch, or resume
+  from where it left off?"
+- If resume: skip Step 2's `git clone`. Check `/shared/{{REPO}}/.migration/` for
+  completed-phase markers (`decomposition.json` present = Phases 1-2 already done;
+  the Phase 3 completion messages collected last time indicate which blocks are
+  done) and resume at the first incomplete phase instead of re-running everything.
+- If re-run: `rm -rf /shared/{{REPO}}` and start fresh from Step 1. Always mint a NEW
+  sprinkle slug even though the target repo is unchanged (see Key Rules — never reuse
+  sprinkle names).
 
 ## Lick Events
 
