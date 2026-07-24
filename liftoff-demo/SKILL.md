@@ -79,22 +79,20 @@ Rules:
 Always double-quote `"$SLUG"` (or the resolved `{{SLUG}}` value) in every shell command
 and sprinkle name — never interpolate it unquoted.
 
-## Pipeline Updates — use `pipeline.js`
+## Pipeline Updates — use the helpers
 
 Three things MUST happen together on every phase transition: update the
 persisted state, rewrite the `.shtml` (so late-joining followers see accumulated
-progress, not a blank slate), and issue the `sprinkle send`. The
-`scripts/pipeline.js` helper does all three in one call — including capturing
-`startedAt`/`completedAt` automatically — so the rule can't be half-done and a
-dropped timestamp can't silently disable the live timer. Use it; do NOT
-hand-roll the send + rewrite.
+progress, not a blank slate), and issue the `sprinkle send`. Two helpers under
+`scripts/` do this so the rule can't be half-done and a dropped timestamp can't
+silently disable the live timer. Use them; do NOT hand-roll the send + rewrite.
 
 ```bash
 # once, at setup — writes state + renders the .shtml (does NOT open the sprinkle):
 node /workspace/skills/liftoff-demo/scripts/pipeline.js init "$SLUG" "$URL"
 
 # on every phase transition:
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" <step> <status> [summary] [link]
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" <step> <status> [summary] [link]
 ```
 
 - `<step>` is one of, in order: `setup`, `extraction`, `decomposition`, `blocks`,
@@ -104,13 +102,19 @@ node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" <step> <sta
   original `startedAt`. You never pass timestamps by hand.
 - Optional `summary` overrides the step's default line; optional `link` (used on
   `deploy done`) adds a "view ↗" link.
-- Between phases: `send` `done` for the finishing step, then `active` for the next.
-- State lives at `/shared/sprinkles/{{SLUG}}-pipeline/.state.json`; the helper
-  re-renders from the installed template every call, so the `.shtml` and the live
+- Between phases: `done` for the finishing step, then `active` for the next.
+- State lives at `/shared/sprinkles/{{SLUG}}-pipeline/.state.json`; the helpers
+  re-render from the installed template every call, so the `.shtml` and the live
   push never drift.
-- If `sprinkle` isn't directly spawnable, the helper still writes state + `.shtml`
-  and prints the exact `sprinkle send …` line for you to run — the rewrite is
-  never skipped.
+
+**Why `psend.sh` and not `pipeline.js send` directly:** in SLICC, node runs in a
+realm where `child_process` cannot spawn `sprinkle`, so `pipeline.js` on its own
+can only update state + rewrite the `.shtml` + record the payload to
+`.last-send.json` (it will NOT crash — it degrades and prints the send line).
+`psend.sh` runs `pipeline.js` for the state work and then issues the
+`sprinkle send` itself from `.last-send.json`, keeping all three atomic in one
+command. If you ever need to push a transition by hand, run `pipeline.js send …`
+and then the `sprinkle send …` line it prints.
 
 ## Procedure
 
@@ -166,8 +170,8 @@ Fail fast before opening any sprinkle:
 3. Push setup done + extraction active:
 
    ```bash
-   node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" setup done "Environment ready"
-   node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" extraction active "Navigating to page..."
+   bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" setup done "Environment ready"
+   bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" extraction active "Navigating to page..."
    ```
 
 ### Step 3 — Run the migration (follow migrate-page procedure directly)
@@ -188,13 +192,13 @@ Follow migrate-page Phase 1 steps (navigate, lazy-load scroll, de-sticky,
 visual tree, screenshot, brand extract, metadata, block inventory).
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" extraction active "Capturing page structure..."
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" extraction active "Capturing page structure..."
 ```
 
 When complete:
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" extraction done "Page captured"
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" extraction done "Page captured"
 ```
 
 **Phase 2 — Decomposition:**
@@ -202,13 +206,13 @@ Follow migrate-page Phase 2 (classify visual tree into blocks/sections)
 and Phase 2.5 (brand/fonts/styles setup).
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" decomposition active "Identifying blocks..."
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" decomposition active "Identifying blocks..."
 ```
 
 When complete (replace N with the real block count):
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" decomposition done "N blocks identified"
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" decomposition done "N blocks identified"
 ```
 
 **Phase 3 — Block Generation:**
@@ -219,6 +223,12 @@ each its prompt in a single response, then `scoop_mute` every scoop, then issue 
 `scoop_wait` for all of them. Muting prevents each scoop completion from fragmenting the
 cone's flow into separate turns; the single wait delivers all completion summaries at once.
 
+**Pre-authorize playwright at scoop-creation time.** Create each scoop with
+`writablePaths` including `/.playwright/` (e.g. `["/shared/", "/.playwright/", "/tmp/"]`)
+so the six near-simultaneous browser-state writes don't each fire a sudo prompt mid
+fan-out. Doing this up front eliminates the approval stalls entirely — do not rely on
+reactively approving sudo requests once they appear.
+
 The batched `scoop_wait` itself only returns once EVERY scoop in the batch completes — it
 cannot report intermediate progress. If you want `M/N blocks done` updates as they arrive,
 poll each scoop's own completion marker (per migrate-page's monitoring convention) between
@@ -226,28 +236,28 @@ the spawn and the batched wait, sending an updated summary each time a new marke
 If intermediate progress isn't needed, skip straight from `0/N` to `N/N`.
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" blocks active "Generating 0/N blocks..."
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" blocks active "Generating 0/N blocks..."
 # optional intermediate updates as markers appear:
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" blocks active "3/6 blocks done"
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" blocks active "3/6 blocks done"
 ```
 
 When all complete:
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" blocks done "All N blocks generated"
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" blocks done "All N blocks generated"
 ```
 
 **Phase 4 — Assembly:**
 Follow migrate-page Phase 4 (collect results, assemble page, create preview).
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" assembly active "Assembling page..."
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" assembly active "Assembling page..."
 ```
 
 When complete:
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" assembly done "Page assembled"
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" assembly done "Page assembled"
 ```
 
 ### Step 4 — Deploy
@@ -260,7 +270,7 @@ to DA + trigger preview.
 Push deploy active first:
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" deploy active "Publishing content to DA..."
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" deploy active "Publishing content to DA..."
 ```
 
 **Target content path:** the init/handoff prompt MUST state where the page is published
@@ -291,11 +301,17 @@ Commit and push all generated code to the repo: `blocks/`, `styles/`, `icons/`,
 **Push to `main`.** The preview/experiment URL serves from `main`
 (`https://main--{repo}--{owner}.aem.page/`), so `{ref}` is `main`. If `migrate-page`
 created a working branch (its Phase 1 runs `git checkout -b migrate/{slug}-{timestamp}`),
-fast-forward-merge it into `main` and push `main` BEFORE triggering preview — otherwise
-the code never reaches the ref the experiment serves and the page stays blank:
+merge it into `main` and push `main` BEFORE triggering preview — otherwise the code never
+reaches the ref the experiment serves and the page stays blank. Do NOT use
+`git merge --ff-only`: the sandbox git parses it as "no branch specified" and fails, then
+a naive run pushes an unchanged `main` and serves a blank site. Use a plain merge and
+verify `main` actually contains the migration commit before pushing:
 
 ```bash
-git checkout main && git merge --ff-only "migrate/{slug}-{timestamp}" && git push origin main
+git checkout main
+git merge "migrate/{slug}-{timestamp}"
+git log --oneline -1 main   # confirm this is the migration commit, not the initial commit
+git push origin main
 ```
 
 #### 4.2 Mount DA (cone-owned)
@@ -310,13 +326,39 @@ to write content. The ONLY valid admin API call is triggering preview (step 4.4)
 
 #### 4.3 Build the DA documents
 
-Build `${CONTENT_PATH}.html`, `nav.html`, and `footer.html` from the
-assembled outputs (`/shared/{repo-name}/drafts/{page-path}.plain.html` and the nav/footer
-fragments). DA documents are **body fragments** with strict rules — violations fail
-silently (DA normalizes the HTML on write and the page just renders wrong):
+Build the DA upload documents — `${CONTENT_PATH}.html`, `nav.html`, and `footer.html` —
+from the assembled outputs (`/shared/{repo-name}/drafts/{page-path}.plain.html` and the
+nav/footer fragments).
 
-- No `<!DOCTYPE>`, `<html>`, `<head>`, `<script>`, `<style>`, or inline `style=`
-  attributes. The pipeline injects head/scripts/styles from the code bus.
+**Wrap each DA upload document in a `<body>`/`<main>` envelope.** This is NOT the same
+artifact as a bare `.plain.html` (those correctly have no html/body). DA derives the
+delivered `.plain.html` from the `<main>` of the uploaded document; with NO `<main>`, DA
+silently drops everything and delivers an empty page — and upload + preview still return
+200, so the failure is invisible until you check the delivered bytes (see the guard in
+Step 4.6). Structure every document like this:
+
+```html
+<body>
+<header></header>
+<main>
+  <div>
+    <div class="hero"> … </div>
+  </div>
+  <!-- … one top-level section <div> per block, in decomposition order … -->
+  <div>
+    <div class="metadata">
+      <div><div>title</div><div>{title from .migration/metadata.json}</div></div>
+      <div><div>description</div><div>{description from .migration/metadata.json}</div></div>
+    </div>
+  </div>
+</main>
+<footer></footer>
+</body>
+```
+
+Still NO `<!DOCTYPE>`, `<html>`, `<head>`, `<script>`, `<style>`, or inline `style=`
+attributes — the pipeline injects head/scripts/styles from the code bus. Also:
+
 - Blocks keep their canonical shape: `<div class="blockname">` with row/cell `<div>`s.
   Malformed blocks are flattened to plain divs and lose their class — and there is no
   error when this happens.
@@ -338,25 +380,14 @@ SVG served from the code bus via the EDS icon system
 (`<span class="icon icon-{name}">`) plus real HTML text — never a text-bearing
 `<img src="logo.svg">`.
 
-**Append a Page Metadata block** as the LAST element of the document, wrapped in its
-OWN top-level section `<div>` — in the canonical div form with key/value CELL DIVS, not
-`<p>` tags (DA's normalization flattens anything else and strips the class, leaving
-visible junk text and no meta tags):
-
-```html
-<div>
-  <div class="metadata">
-    <div><div>title</div><div>{title from .migration/metadata.json}</div></div>
-    <div><div>description</div><div>{description from .migration/metadata.json}</div></div>
-  </div>
-</div>
-```
-
-The class must be exactly `metadata` (single lowercase token), and the block MUST be its
-own top-level section — a bare `<div class="metadata">` placed directly under `<main>`
-is consumed but NOT converted to meta tags (the class disappears, zero
-`<title>`/`<meta>`/OG tags emitted, and the title falls back to the H1). Wrapped
-correctly, this becomes `<title>`/`<meta name="description">`/OG tags at delivery.
+**Page Metadata block** — the LAST section inside `<main>` (shown in the skeleton above):
+its own top-level `<div>` wrapping `<div class="metadata">`, with key/value CELL DIVS, not
+`<p>` tags (DA's normalization flattens anything else and strips the class). The class
+must be exactly `metadata` (single lowercase token). A bare `<div class="metadata">` that
+is NOT its own section is consumed but NOT converted — the class disappears, zero
+`<title>`/`<meta>`/OG tags are emitted, and the title falls back to the H1. Placed
+correctly it becomes `<title>`/`<meta name="description">`/OG tags at delivery — without
+it the page has no SEO metadata.
 
 **Symbol characters:** use HTML entities for symbols that may not round-trip through
 DA's markdown conversion — `&#169;` (©), `&#8482;` (™), `&#174;` (®). A literal `©` can
@@ -421,14 +452,29 @@ images by HTTP status of the media URL + a screenshot, never by `naturalWidth` a
 
 #### 4.6 Poll and confirm
 
-Poll `{{PREVIEW_URL}}` with a bounded deadline (e.g. every 5s, up to 2 minutes) until it
-returns 200 — do NOT poll unbounded; if the deadline is reached without a 200, stop and
+**First, assert the content actually converted — an empty `.plain.html` is the canonical
+symptom of a missing `<main>` envelope (Step 4.3) and every other signal (200s) will lie.**
+Fetch the delivered `.plain.html` for each document and fail loudly if any is empty or
+near-empty BEFORE polling the page or marking deploy done:
+
+```bash
+for doc in "$CONTENT_PATH" nav footer; do
+  BYTES=$(curl -s "https://{ref}--{repo}--{owner}.aem.page/${doc}.plain.html" | wc -c)
+  if [ "$BYTES" -lt 100 ]; then
+    echo "$doc.plain.html is empty ($BYTES bytes) — DA dropped the content (missing <main>?). Re-check Step 4.3, re-upload, re-preview. Do NOT mark deploy done." >&2
+    exit 1
+  fi
+done
+```
+
+Then poll `{{PREVIEW_URL}}` with a bounded deadline (e.g. every 5s, up to 2 minutes) until
+it returns 200 — do NOT poll unbounded; if the deadline is reached without a 200, stop and
 report the failure instead of hanging or silently marking deploy done. Once it's live,
 reload once more and screenshot to confirm the page renders (fonts, images, header,
 footer). Then push deploy done, passing the live URL as the `link`:
 
 ```bash
-node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" deploy done "Live!" "$PREVIEW_URL"
+bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" deploy done "Live!" "$PREVIEW_URL"
 ```
 
 ### Step 5 — Open completion sprinkle
@@ -534,3 +580,16 @@ None — this is a fully automated flow. The user watches, the cone drives.
 - **Sandbox `curl` quirks** — SLICC's `curl` does NOT support `--fail-with-body`; it
   errors `unrecognized option` and exits before making the request. Check HTTP status
   with `-w '%{http_code}'` and an explicit range test instead (see Step 4.4).
+- **Sandbox `git` quirks** — `git merge --ff-only <branch>` is misparsed as "no branch
+  specified" and fails. Use a plain `git merge <branch>` and verify `main` contains the
+  migration commit before pushing (see Step 4.1).
+- **`node` cannot spawn `sprinkle`** — in SLICC's realm `child_process.spawnSync` is
+  unavailable, so `pipeline.js` can only write state + `.shtml` + `.last-send.json`; use
+  `psend.sh` to actually push the update (see Pipeline Updates).
+- **`mount --list` / `mount refresh` are approval-gated** — the initial
+  `mount --source … /mnt/da` runs unprompted, but `list`/`refresh` block on interactive
+  approval and can stall a run. Avoid them on the hot path; if you need `refresh` to
+  confirm a write persisted, expect an approval prompt.
+- **`admin.da.live` / `content.da.live` reads are egress-gated** — direct GETs of the DA
+  source return empty from the sandbox. Debug via the `/mnt/da/` mount, not direct HTTP;
+  an "empty" response there is an egress block, not empty content.
