@@ -259,11 +259,11 @@
 
       if (data.status) {
         if (data.status === 'active' && !state.steps[idx].startedAt) {
-          state.steps[idx].startedAt = Date.now();
+          state.steps[idx].startedAt = data.startedAt || Date.now();
         }
         if (data.status === 'done' && !state.steps[idx].completedAt) {
-          state.steps[idx].completedAt = Date.now();
-          if (!state.steps[idx].startedAt) state.steps[idx].startedAt = state.steps[idx].completedAt;
+          state.steps[idx].completedAt = data.completedAt || Date.now();
+          if (!state.steps[idx].startedAt) state.steps[idx].startedAt = data.startedAt || state.steps[idx].completedAt;
         }
         state.steps[idx].status = data.status;
       }
