@@ -25,7 +25,7 @@ Liftoff to AEM Labs demo experience.
 
 - Migration skills installed (`upskill aemcoder/skills --path skills/migration --all`)
 - The `migrate-page` sprinkle must be closed after install (`sprinkle close migrate-page`)
-  because it conflicts with our pipeline sprinkle.
+  because it conflicts with our pipeline sprinkle (enforced by Step 0).
 - GitHub access configured by the Liftoff Lab
 - EDS repo pre-created by the Liftoff Lab
 
@@ -92,6 +92,28 @@ Procedure after every `sprinkle send`:
 
 ## Procedure
 
+### Step 0 — Verify prerequisites
+
+Fail fast before opening any sprinkle:
+
+1. Confirm the migration skills are installed at the expected paths:
+
+   ```bash
+   test -f /workspace/skills/migrate-page/SKILL.md
+   ```
+
+   If missing, install first: `upskill aemcoder/skills --path skills/migration --all`
+   — do NOT continue with a dead path.
+
+2. Close the migrate-page sprinkle (idempotent — safe if already closed):
+
+   ```bash
+   sprinkle close migrate-page
+   ```
+
+   It conflicts with our pipeline sprinkle. If it re-opens later in the run
+   (e.g. after a skill re-install), close it again.
+
 ### Step 1 — Setup & open pipeline sprinkle
 
 1. Derive slug from the URL
@@ -119,7 +141,7 @@ Procedure after every `sprinkle send`:
 ### Step 2 — Clone repo & verify environment
 
 1. Clone the target repo: `git clone https://github.com/{{OWNER}}/{{REPO}}.git /shared/{{REPO}}`
-2. Verify the migration skills are installed (they should be from the init prompt)
+2. Migration skills were already verified in Step 0
 3. Push setup done + extraction active:
    ```
    SETUP_DONE=$(date +%s000)
