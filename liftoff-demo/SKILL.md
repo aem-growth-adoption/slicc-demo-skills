@@ -34,10 +34,12 @@ Liftoff to AEM Labs demo experience.
 - **Never reference `/workspace/` or `file://` in anything a follower sees** —
   pipeline `link` fields, confirmation screenshots, and sprinkle data must use
   EDS/`aem.page` URLs, never local paths.
-- **Block scoops must never broadcast previews to followers** — they verify locally
-  via `open` (per `migrate-block`); only the cone touches follower-visible UI. (The
-  mechanism — using `open`, not `serve`, for local verification — lives in
-  `migrate-block`; this rule is the demo-level invariant, not a re-implementation.)
+- **Block scoops must never broadcast previews to followers** — a block scoop verifies
+  its work locally with `open` (project-mode preview, no broadcast, no focus grab; the
+  mechanism lives in `migrate-block`), never `serve`. Only the cone touches
+  follower-visible UI. This restricts *scoops*, not the cone: the orchestration MAY use
+  `serve` deliberately when it needs a shareable preview URL for followers — the ban is
+  on scoops broadcasting, not on `serve` itself.
 - **Cone owns ALL `sprinkle send` calls** — never delegate pipeline updates to scoops.
   This is a deliberate exception to the usual "delegate work to scoops" guidance:
   only the cone sees every phase transition, and scoops busy with block work skip or
