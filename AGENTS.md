@@ -6,6 +6,7 @@
 {skill-name}/
   SKILL.md              Slicc skill definition (YAML frontmatter + procedure)
   templates/            Sprinkle templates (.shtml.tpl)
+  scripts/              Optional node helpers + colocated *.test.js (run: node --test)
 ```
 
 Each top-level directory is a self-contained demo skill. Skills are

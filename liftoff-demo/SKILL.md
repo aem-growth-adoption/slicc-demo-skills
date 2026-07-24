@@ -79,39 +79,38 @@ Rules:
 Always double-quote `"$SLUG"` (or the resolved `{{SLUG}}` value) in every shell command
 and sprinkle name — never interpolate it unquoted.
 
-## Pipeline Sprinkle Updates
+## Pipeline Updates — use `pipeline.js`
 
-The cone pushes status updates between phases:
+Three things MUST happen together on every phase transition: update the
+persisted state, rewrite the `.shtml` (so late-joining followers see accumulated
+progress, not a blank slate), and issue the `sprinkle send`. The
+`scripts/pipeline.js` helper does all three in one call — including capturing
+`startedAt`/`completedAt` automatically — so the rule can't be half-done and a
+dropped timestamp can't silently disable the live timer. Use it; do NOT
+hand-roll the send + rewrite.
 
-- Before starting a phase: push `active` for the current step
-- When a phase completes: push `done`, then `active` for the next
+```bash
+# once, at setup — writes state + renders the .shtml (does NOT open the sprinkle):
+node /workspace/skills/liftoff-demo/scripts/pipeline.js init "$SLUG" "$URL"
 
-Format: `sprinkle send {{SLUG}}-pipeline '{"step":"<id>","status":"active|done","summary":"...","link":"...","startedAt":<epoch_ms>,"completedAt":<epoch_ms>}'`
+# on every phase transition:
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" <step> <status> [summary] [link]
+```
 
-Timestamp rules:
-
-- When sending `"status":"active"`: include `"startedAt":<now_ms>` (capture BEFORE the
-  phase starts)
-- When sending `"status":"done"`: include `"completedAt":<now_ms>` (and the phase's
-  original `"startedAt"` so late joiners compute the elapsed time)
-- Capture timestamps with: `TIMESTAMP=$(date +%s000)` (epoch milliseconds)
-- The pipeline template renders live duration timers from these fields — omitting them
-  silently disables the timers
-
-Step IDs in order: `setup`, `extraction`, `decomposition`, `blocks`, `assembly`, `deploy`
-
-### State Persistence
-
-Every time you push a pipeline update, you MUST also rewrite the
-sprinkle's `.shtml` file with the updated `{{INITIAL_STATE_JSON}}`
-reflecting all current step statuses. This ensures followers who join
-mid-session see the full accumulated progress.
-
-Procedure after every `sprinkle send`:
-
-1. Update your in-memory steps array with the new status AND timestamps (`startedAt`, `completedAt`)
-2. Rewrite `/shared/sprinkles/{{SLUG}}-pipeline/{{SLUG}}-pipeline.shtml`
-3. The `sprinkle send` pushes the live update; the rewritten file catches up new joiners
+- `<step>` is one of, in order: `setup`, `extraction`, `decomposition`, `blocks`,
+  `assembly`, `deploy`.
+- `<status>` is `active`, `done`, or `pending`.
+- `active` captures `startedAt` once; `done` captures `completedAt` and keeps the
+  original `startedAt`. You never pass timestamps by hand.
+- Optional `summary` overrides the step's default line; optional `link` (used on
+  `deploy done`) adds a "view ↗" link.
+- Between phases: `send` `done` for the finishing step, then `active` for the next.
+- State lives at `/shared/sprinkles/{{SLUG}}-pipeline/.state.json`; the helper
+  re-renders from the installed template every call, so the `.shtml` and the live
+  push never drift.
+- If `sprinkle` isn't directly spawnable, the helper still writes state + `.shtml`
+  and prints the exact `sprinkle send …` line for you to run — the rewrite is
+  never skipped.
 
 ## Procedure
 
@@ -142,30 +141,23 @@ Fail fast before opening any sprinkle:
 
 ### Step 1 — Setup & open pipeline sprinkle
 
-1. Derive slug from the URL
-2. Read `/workspace/skills/liftoff-demo/templates/pipeline.shtml.tpl`
-3. Replace `{{URL}}`, `{{SLUG}}`
-4. Capture the start timestamp: `START_TS=$(date +%s000)`, then replace
-   `{{INITIAL_STATE_JSON}}` with the initial state (setup=active, rest pending):
+1. Derive the slug from the URL (see Slug Derivation); keep the source URL too.
+   Set `SLUG` and `URL` for the helper calls below.
+2. Initialize state + render the pipeline `.shtml` (setup active, rest pending):
 
-   ```json
-   {"steps":[
-     {"id":"setup","status":"active","summary":"Cloning repo & preparing environment...","link":null,"startedAt":<START_TS>,"completedAt":null},
-     {"id":"extraction","status":"pending","summary":"Capture page structure & brand","link":null,"startedAt":null,"completedAt":null},
-     {"id":"decomposition","status":"pending","summary":"Identify blocks & sections","link":null,"startedAt":null,"completedAt":null},
-     {"id":"blocks","status":"pending","summary":"Generate EDS blocks in parallel","link":null,"startedAt":null,"completedAt":null},
-     {"id":"assembly","status":"pending","summary":"Assemble page & create preview","link":null,"startedAt":null,"completedAt":null},
-     {"id":"deploy","status":"pending","summary":"Publish content & go live","link":null,"startedAt":null,"completedAt":null}
-   ]}
+   ```bash
+   node /workspace/skills/liftoff-demo/scripts/pipeline.js init "$SLUG" "$URL"
    ```
 
-5. Write to `/shared/sprinkles/{{SLUG}}-pipeline/{{SLUG}}-pipeline.shtml`
-6. Run: `sprinkle open {{SLUG}}-pipeline`
-7. Push initial status:
+3. Open the sprinkle:
 
+   ```bash
+   sprinkle open {{SLUG}}-pipeline
    ```
-   sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"active","summary":"Cloning repo & preparing environment...","startedAt":'$START_TS'}'
-   ```
+
+   `init` already baked setup=active (with its `startedAt`) into the rendered
+   `.shtml`, so the first follower sees setup running immediately — no separate
+   initial `send` is needed until the first transition.
 
 ### Step 2 — Clone repo & verify environment
 
@@ -173,11 +165,9 @@ Fail fast before opening any sprinkle:
 2. Migration skills were already verified in Step 0
 3. Push setup done + extraction active:
 
-   ```
-   SETUP_DONE=$(date +%s000)
-   sprinkle send {{SLUG}}-pipeline '{"step":"setup","status":"done","summary":"Environment ready","startedAt":'$START_TS',"completedAt":'$SETUP_DONE'}'
-   EXTRACT_START=$(date +%s000)
-   sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Navigating to page...","startedAt":'$EXTRACT_START'}'
+   ```bash
+   node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" setup done "Environment ready"
+   node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" extraction active "Navigating to page..."
    ```
 
 ### Step 3 — Run the migration (follow migrate-page procedure directly)
@@ -197,31 +187,28 @@ updates at each transition:
 Follow migrate-page Phase 1 steps (navigate, lazy-load scroll, de-sticky,
 visual tree, screenshot, brand extract, metadata, block inventory).
 
-```
-sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"active","summary":"Capturing page structure...","startedAt":'$EXTRACT_START'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" extraction active "Capturing page structure..."
 ```
 
 When complete:
 
-```
-EXTRACT_DONE=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"extraction","status":"done","summary":"Page captured","startedAt":'$EXTRACT_START',"completedAt":'$EXTRACT_DONE'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" extraction done "Page captured"
 ```
 
 **Phase 2 — Decomposition:**
 Follow migrate-page Phase 2 (classify visual tree into blocks/sections)
 and Phase 2.5 (brand/fonts/styles setup).
 
-```
-DECOMP_START=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"active","summary":"Identifying blocks...","startedAt":'$DECOMP_START'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" decomposition active "Identifying blocks..."
 ```
 
-When complete:
+When complete (replace N with the real block count):
 
-```
-DECOMP_DONE=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"decomposition","status":"done","summary":"N blocks identified","startedAt":'$DECOMP_START',"completedAt":'$DECOMP_DONE'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" decomposition done "N blocks identified"
 ```
 
 **Phase 3 — Block Generation:**
@@ -235,44 +222,33 @@ cone's flow into separate turns; the single wait delivers all completion summari
 The batched `scoop_wait` itself only returns once EVERY scoop in the batch completes — it
 cannot report intermediate progress. If you want `M/N blocks done` updates as they arrive,
 poll each scoop's own completion marker (per migrate-page's monitoring convention) between
-the spawn and the batched wait, pushing an updated summary each time a new marker appears.
+the spawn and the batched wait, sending an updated summary each time a new marker appears.
 If intermediate progress isn't needed, skip straight from `0/N` to `N/N`.
 
-```
-BLOCKS_START=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"Generating 0/N blocks...","startedAt":'$BLOCKS_START'}'
-```
-
-Update as scoops complete:
-
-```
-sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"active","summary":"3/6 blocks done","startedAt":'$BLOCKS_START'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" blocks active "Generating 0/N blocks..."
+# optional intermediate updates as markers appear:
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" blocks active "3/6 blocks done"
 ```
 
 When all complete:
 
-```
-BLOCKS_DONE=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"blocks","status":"done","summary":"All N blocks generated","startedAt":'$BLOCKS_START',"completedAt":'$BLOCKS_DONE'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" blocks done "All N blocks generated"
 ```
 
 **Phase 4 — Assembly:**
 Follow migrate-page Phase 4 (collect results, assemble page, create preview).
 
-```
-ASSEMBLY_START=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"active","summary":"Assembling page...","startedAt":'$ASSEMBLY_START'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" assembly active "Assembling page..."
 ```
 
 When complete:
 
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" assembly done "Page assembled"
 ```
-ASSEMBLY_DONE=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"assembly","status":"done","summary":"Page assembled","startedAt":'$ASSEMBLY_START',"completedAt":'$ASSEMBLY_DONE'}'
-```
-
-**Remember:** After every `sprinkle send`, rewrite the pipeline `.shtml`
-file with updated state (see State Persistence section above).
 
 ### Step 4 — Deploy
 
@@ -283,9 +259,8 @@ to DA + trigger preview.
 
 Push deploy active first:
 
-```
-DEPLOY_START=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"active","summary":"Publishing content to DA...","startedAt":'$DEPLOY_START'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" deploy active "Publishing content to DA..."
 ```
 
 **Target content path:** the init/handoff prompt MUST state where the page is published
@@ -450,11 +425,10 @@ Poll `{{PREVIEW_URL}}` with a bounded deadline (e.g. every 5s, up to 2 minutes) 
 returns 200 — do NOT poll unbounded; if the deadline is reached without a 200, stop and
 report the failure instead of hanging or silently marking deploy done. Once it's live,
 reload once more and screenshot to confirm the page renders (fonts, images, header,
-footer). Then push deploy done:
+footer). Then push deploy done, passing the live URL as the `link`:
 
-```
-DEPLOY_DONE=$(date +%s000)
-sprinkle send {{SLUG}}-pipeline '{"step":"deploy","status":"done","summary":"Live!","link":"{{PREVIEW_URL}}","startedAt":'$DEPLOY_START',"completedAt":'$DEPLOY_DONE'}'
+```bash
+node /workspace/skills/liftoff-demo/scripts/pipeline.js send "$SLUG" deploy done "Live!" "$PREVIEW_URL"
 ```
 
 ### Step 5 — Open completion sprinkle
