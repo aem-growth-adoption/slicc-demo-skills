@@ -38,11 +38,25 @@ Liftoff to AEM Labs demo experience.
 ## Slug Derivation
 
 Derive from URL hostname + path + 4 random hex chars:
+
 - `https://www.adobe.com/products/photoshop` → `adobe-photoshop-a3f1`
 - `https://wknd.site/basecamp` → `wknd-basecamp-9c2e`
+- `https://wknd-adventures.com/basecamp.html` → `wknd-adventures-basecamp-7b21`
+- `https://example.com/` → `example-index-c4d9`
 
-Strip `www.`, take hostname first segment + last path segment, lowercase,
-append `-$(openssl rand -hex 2)`.
+Rules:
+
+1. Strip `www.` and the TLD; keep ALL remaining hostname labels joined with hyphens
+   (`wknd-adventures.com` → `wknd-adventures`, `wknd.site` → `wknd`).
+2. Take the last path segment, minus any file extension; use `index` when the path is
+   `/` or empty.
+3. Lowercase everything.
+4. Append `-` + 4 random hex chars. Generate them with node — do NOT assume `openssl`
+   exists in the sandbox:
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(2).toString('hex'))"
+   ```
 
 ## Pipeline Sprinkle Updates
 
