@@ -194,7 +194,10 @@ test("psend.sh bridges pipeline.js state work to a real sprinkle send", () => {
 	const bin = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-bin-"));
 	const log = path.join(bin, "sprinkle.log");
 	const shim = path.join(bin, "sprinkle");
-	fs.writeFileSync(shim, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\n`);
+	fs.writeFileSync(
+		shim,
+		`#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${log}"\n`,
+	);
 	fs.chmodSync(shim, 0o755);
 
 	const env = {
@@ -203,10 +206,14 @@ test("psend.sh bridges pipeline.js state work to a real sprinkle send", () => {
 		PIPELINE_TEMPLATE: templatePath,
 		PIPELINE_SPRINKLE_DIR: sprinkleDir,
 	};
-	const init = spawnSync(process.execPath, [SCRIPT, "init", "demo10", "https://example.com/"], {
-		encoding: "utf8",
-		env: { ...env, PIPELINE_DRY_RUN: "1" },
-	});
+	const init = spawnSync(
+		process.execPath,
+		[SCRIPT, "init", "demo10", "https://example.com/"],
+		{
+			encoding: "utf8",
+			env: { ...env, PIPELINE_DRY_RUN: "1" },
+		},
+	);
 	assert.equal(init.status, 0, init.stderr);
 
 	const psend = path.join(__dirname, "psend.sh");
