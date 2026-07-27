@@ -166,12 +166,12 @@
 
   <script>
     var STEPS = [
-      { id: 'setup',         label: 'Setup',          icon: '⚙️' },
-      { id: 'extraction',    label: 'Extraction',     icon: '🔍' },
-      { id: 'decomposition', label: 'Decomposition',  icon: '🧩' },
-      { id: 'blocks',        label: 'Blocks',         icon: '🏗️' },
-      { id: 'assembly',      label: 'Assembly',       icon: '📦' },
-      { id: 'deploy',        label: 'Deploy',         icon: '🚀' }
+      { id: 'setup',         label: 'Setup',          summary: 'Cloning repo & preparing environment...' },
+      { id: 'extraction',    label: 'Extraction',     summary: 'Capture page structure & brand' },
+      { id: 'decomposition', label: 'Decomposition',  summary: 'Identify blocks & sections' },
+      { id: 'blocks',        label: 'Blocks',         summary: 'Generate EDS blocks in parallel' },
+      { id: 'assembly',      label: 'Assembly',       summary: 'Assemble page & create preview' },
+      { id: 'deploy',        label: 'Deploy',         summary: 'Publish content & go live' }
     ];
 
     var bakedState = null;
@@ -179,7 +179,7 @@
 
     var state = {
       steps: STEPS.map(function(s) {
-        return { id: s.id, status: 'pending', summary: '', link: null, startedAt: null, completedAt: null };
+        return { id: s.id, status: 'pending', summary: s.summary, link: null, startedAt: null, completedAt: null };
       })
     };
 
@@ -211,9 +211,12 @@
           : '';
 
         var timerHtml = '';
-        if (step.status === 'done' && step.startedAt && step.completedAt) {
+        if (step.status === 'done') {
+          if (!step.completedAt) step.completedAt = Date.now();
+          if (!step.startedAt) step.startedAt = step.completedAt;
           timerHtml = '<span class="step-timer">' + formatDuration(step.completedAt - step.startedAt) + '</span>';
-        } else if (step.status === 'active' && step.startedAt) {
+        } else if (step.status === 'active') {
+          if (!step.startedAt) step.startedAt = Date.now();
           timerHtml = '<span class="step-timer" data-started="' + step.startedAt + '"></span>';
         }
 
