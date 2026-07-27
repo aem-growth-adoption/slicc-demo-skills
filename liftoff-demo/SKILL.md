@@ -34,6 +34,11 @@ Liftoff to AEM Labs demo experience.
 - **Never reference `/workspace/` or `file://` in anything a follower sees** —
   pipeline `link` fields, confirmation screenshots, and sprinkle data must use
   EDS/`aem.page` URLs, never local paths.
+- **The cone must NEVER `read_file` a screenshot or other binary** — use
+  `open --view --size high <path>` to inspect it. `--fullPage` screenshots here run
+  1.4–3 MB; `read_file` on one overflows the cone's context and can cascade into an
+  unrecoverable "agent is already processing / context-overflow recovery failed" state
+  that needs a human resume. This is the single failure most likely to halt a run.
 - **Block scoops must never broadcast previews to followers** — a block scoop verifies
   its work locally with `open` (project-mode preview, no broadcast, no focus grab; the
   mechanism lives in `migrate-block`), never `serve`. Only the cone touches
@@ -224,6 +229,13 @@ bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" decomposition done 
 **Phase 3 — Block Generation:**
 Follow migrate-page Phase 3 (create one scoop per block, monitor completion).
 
+**Model pre-flight (do this before the fan-out).** The block configs may pin a model id
+that has since been retired (e.g. `claude-opus-4-6` when the environment is on `-4-8`). A
+retired id fails the whole fan-out. Verify the config's model exists (`models
+--all-versions`) and, if it doesn't, override every scoop to the cone's own model before
+creating them — use the returned configs verbatim for the PROMPTS, but not for a stale
+model pin.
+
 **Coordinating the block scoops (mute → batched wait):** create ALL block scoops and feed
 each its prompt in a single response, then `scoop_mute` every scoop, then issue ONE batched
 `scoop_wait` for all of them. Muting prevents each scoop completion from fragmenting the
@@ -235,11 +247,14 @@ so the six near-simultaneous browser-state writes don't each fire a sudo prompt 
 fan-out. Doing this up front eliminates the approval stalls entirely — do not rely on
 reactively approving sudo requests once they appear.
 
-The batched `scoop_wait` itself only returns once EVERY scoop in the batch completes — it
-cannot report intermediate progress. If you want `M/N blocks done` updates as they arrive,
-poll each scoop's own completion marker (per migrate-page's monitoring convention) between
-the spawn and the batched wait, sending an updated summary each time a new marker appears.
-If intermediate progress isn't needed, skip straight from `0/N` to `N/N`.
+The batched `scoop_wait` only returns once EVERY scoop completes — it cannot itself report
+intermediate progress. **For the demo experience, when `N ≥ 3` you SHOULD show live `M/N`
+progress** (this skill's whole promise is "live progress the whole way", and block
+generation is the longest phase — a silent 0/N→N/N jump is the least-live moment): between
+the spawn and the batched wait, poll each scoop's own completion marker (per migrate-page's
+monitoring convention) and send an updated `blocks active "M/N blocks done"` each time a
+new marker appears, so followers watch `3/6 → 5/6 → 6/6` tick over. Only skip straight from
+`0/N` to `N/N` for tiny runs (`N < 3`) where there's nothing meaningful to watch.
 
 ```bash
 bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" blocks active "Generating 0/N blocks..."
@@ -559,8 +574,15 @@ bash /workspace/skills/liftoff-demo/scripts/psend.sh "$SLUG" deploy done "Live!"
 **Stats must be real counts, never sample literals.** Compute each placeholder before
 writing the completion sprinkle:
 
-- `{{BLOCK_COUNT}}` — number of blocks in `decomposition.json`.
-- `{{FRAGMENT_COUNT}}` — nav + footer + any additional fragments uploaded in Step 4.
+- `{{BLOCK_COUNT}}` — count the block directories under `blocks/` that this run created
+  or modified, INCLUDING auxiliary blocks a scoop spawned (e.g. a `footer-columns`
+  sub-block). Prefer the on-disk directories over `decomposition.json` so the number
+  reflects what actually shipped (auxiliary sub-blocks make the disk count ≥ the
+  decomposition count). If you instead use the decomposition count, keep the label
+  "blocks migrated" and note auxiliary sub-blocks are excluded — just be consistent and
+  defensible.
+- `{{FRAGMENT_COUNT}}` — count the fragment documents uploaded to DA (nav + footer + any
+  additional). The page document itself is NOT a fragment and is not counted here.
 - `{{MEDIA_ASSET_COUNT}}` — count of UNIQUE media assets by source image or content
   hash, NOT raw warmed-URL count (Step 4.5's URL list includes multiple responsive
   variants per image, which would inflate the count).
@@ -584,6 +606,11 @@ Preview: {{PREVIEW_URL}}
 ```
 
 ## Re-run Behavior
+
+The target repo may also be pre-seeded at `/workspace/{{REPO}}` (the lab may stage it
+there). That copy is NOT authoritative for this run — `/shared/{{REPO}}` is the working
+clone and the only path the resume check below consults. Ignore `/workspace/{{REPO}}`
+unless you deliberately copy from it.
 
 If `/shared/{{REPO}}` already exists (a prior run of this skill for the same target
 repo):
