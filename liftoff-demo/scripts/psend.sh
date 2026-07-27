@@ -17,7 +17,7 @@ payload="$root/${slug}-pipeline/.last-send.json"
 
 PIPELINE_DRY_RUN=1 node "$here/pipeline.js" send "$@" >/dev/null
 if [ ! -f "$payload" ]; then
-  echo "psend.sh: pipeline.js did not write $payload" >&2
-  exit 1
+	echo "psend.sh: pipeline.js did not write $payload" >&2
+	exit 1
 fi
 sprinkle send "${slug}-pipeline" "$(cat "$payload")"
