@@ -124,6 +124,8 @@ async function postProgress(state, reason) {
 		state: publicState(state),
 	});
 	try {
+		const controller = new AbortController();
+		const timeout = setTimeout(() => controller.abort(), 10_000);
 		const res = await fetch(`${base}/events`, {
 			method: "POST",
 			headers: {
@@ -132,7 +134,9 @@ async function postProgress(state, reason) {
 					"OF1_LABS_HMAC:x-job-signature:x-job-timestamp",
 			},
 			body,
+			signal: controller.signal,
 		});
+		clearTimeout(timeout);
 		if (!res.ok) {
 			const text = await res.text().catch(() => "");
 			process.stderr.write(
