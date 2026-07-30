@@ -107,53 +107,8 @@ function writeShtml(state) {
 	return out;
 }
 
-function publicState(state) {
-	return { slug: state.slug, url: state.url, steps: state.steps };
-}
-
-function webhookBaseFor(state) {
-	return state.webhookBase || process.env.LIFTOFF_WEBHOOK_BASE || "";
-}
-
-async function postProgress(state, reason) {
-	const base = webhookBaseFor(state).replace(/\/+$/, "");
-	if (!base) return;
-	const body = JSON.stringify({
-		type: "liftoff.pipeline.state",
-		at: Date.now(),
-		state: publicState(state),
-	});
-	try {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 10_000);
-		const res = await fetch(`${base}/events`, {
-			method: "POST",
-			headers: {
-				"content-type": "application/json",
-				"x-slicc-hmac-sign":
-					"OF1_LABS_HMAC:x-job-signature:x-job-timestamp",
-			},
-			body,
-			signal: controller.signal,
-		});
-		clearTimeout(timeout);
-		if (!res.ok) {
-			const text = await res.text().catch(() => "");
-			process.stderr.write(
-				`pipeline.js: webhook post failed (${reason}): HTTP ${res.status} ${text.slice(0, 200)}\n`,
-			);
-			return;
-		}
-		process.stdout.write(`webhook progress posted (${reason})\n`);
-	} catch (e) {
-		process.stderr.write(
-			`pipeline.js: webhook post failed (${reason}): ${e.message}\n`,
-		);
-	}
-}
-
-async function cmdInit(slug, url, webhookBase) {
-	if (!slug || !url) fail("usage: init <slug> <url> [webhookBase]");
+function cmdInit(slug, url) {
+	if (!slug || !url) fail("usage: init <slug> <url>");
 	const ts = Date.now();
 	const steps = STEPS.map((s, i) => ({
 		id: s.id,
@@ -163,12 +118,10 @@ async function cmdInit(slug, url, webhookBase) {
 		startedAt: i === 0 ? ts : null,
 		completedAt: null,
 	}));
-	const wb = webhookBase || process.env.LIFTOFF_WEBHOOK_BASE || "";
-	const state = { slug, url, steps, webhookBase: wb };
+	const state = { slug, url, steps };
 	writeState(state);
 	const out = writeShtml(state);
 	process.stdout.write(`initialized ${sprinkleName(slug)}: ${out}\n`);
-	await postProgress(state, "init");
 }
 
 function applyStatus(step, status, ts) {
@@ -180,7 +133,7 @@ function applyStatus(step, status, ts) {
 	step.status = status;
 }
 
-async function cmdSend(slug, stepId, status, summary, link) {
+function cmdSend(slug, stepId, status, summary, link) {
 	if (!slug || !stepId || !status) {
 		fail("usage: send <slug> <step> <status> [summary] [link]");
 	}
@@ -213,7 +166,6 @@ async function cmdSend(slug, stepId, status, summary, link) {
 	fs.writeFileSync(lastSendPath(slug), JSON.stringify(payload));
 	issueSend(slug, payload);
 	process.stdout.write(`sent ${stepId}=${status}; rewrote ${out}\n`);
-	await postProgress(state, `send:${stepId}:${status}`);
 }
 
 function shSingleQuote(s) {
@@ -256,27 +208,12 @@ function issueSend(slug, payload) {
 	if (r.status !== 0) fail(`sprinkle send exited ${r.status}`);
 }
 
-async function cmdHeartbeat(slug) {
-	if (!slug) fail("usage: heartbeat <slug>");
-	const state = readState(slug);
-	const deploy = state.steps.find((s) => s.id === "deploy");
-	if (deploy?.status === "done") {
-		process.stdout.write(
-			`heartbeat skipped for ${slug}: terminal deploy done\n`,
-		);
-		return;
-	}
-	await postProgress(state, "heartbeat");
-	process.stdout.write(`heartbeat posted for ${slug}\n`);
-}
-
-async function main() {
+function main() {
 	const [cmd, ...rest] = process.argv.slice(2);
-	if (cmd === "init") return cmdInit(rest[0], rest[1], rest[2]);
+	if (cmd === "init") return cmdInit(rest[0], rest[1]);
 	if (cmd === "send")
 		return cmdSend(rest[0], rest[1], rest[2], rest[3], rest[4]);
-	if (cmd === "heartbeat") return cmdHeartbeat(rest[0]);
-	return fail("usage: pipeline.js <init|send|heartbeat> ...");
+	return fail("usage: pipeline.js <init|send> ...");
 }
 
-main().catch((e) => fail(e.message));
+main();
